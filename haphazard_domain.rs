@@ -80,7 +80,9 @@ impl<T> Reclaim for T {}
     //     animal.speak();
     // }
     // fn main() {
+    //     // fn item can coerce/decay to function ptr when passing by value
     //     println!("take_fn_ptr: {}", take_fn_ptr(add_one, 5));
+    //     // fn item can not be coerce/decay when pass by ref.
     //     //println!("take_fn_ref: {}", take_fn_ref(&add_one, 5));
     //     println!("take_fn_ref: {}", take_fn_ref(&ADD_PTR, 5));
     //     let d = Dog;
