@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-// Each node shared owned by its parent node and children nodes.
-// Ref counting a shared object by ref/value.
-// Shared Rc disallow mut. To change interior node, use RefCell or Cell.
-// Node is not copyable, Ref counting use RefCell to the node and mut.
+// RC for multiple Ownership: Each owner of node has a RC clone.
+// container(smart ptr) alloc the Node<T>, Shared owned via Ref counting.
+// Each Node is a RC clone.
+// Rc disallow mut. Use interior mutable container RefCell or Cell.
+// Node is shared by Cloning RC, which copies the ptr to container.
 type NodeRef<T> = Rc<RefCell<_Node<T>>>;
 
 // A node is a value and its neighbor repr by a vec of shared ref to adj nodes.
@@ -39,7 +40,7 @@ impl<T> Node<T> {
     // Add a Rc clone of the other node to self's adjacent vector.
     // note all refs are immut ref, not mut ref. as interior mutability.
     fn add_adjacent(&self, other: &Node<T>) {
-        // RefCell::borrow_mut(&self) give you RefMut<'_, T>
+        // RefCell::borrow_mut(&self) returns a RefMut<'_, T>. Deref coercion.
         (self.0.borrow_mut()).adjacent_.push(other.0.clone());
     }
 }
