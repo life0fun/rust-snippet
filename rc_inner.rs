@@ -1,21 +1,26 @@
 // https://tekshinobi.com/rust-tips-box-rc-arc-cell-refcell-mutex/
 
-// Rc let you hold a shared ref without worry lifetime as ref counting.
-// Cell<T> let you mutate(setter) via a shared ref.  { state: Cell<RefState> }
-// RefCell<T> use UnsafeCell to store value and Cell<RefState> to track ref counts using unsafe { &*self }
+// Rc Innner is a boxed ptr to heap alloced T guarded by refcnt. 
+// Multiple owners each has its own RC clone. RC clone creates a shared_ptr(boxed raw ptr) to RcInner.
+// Cell<T> always copy T. { state: Cell<RefState> }
+// RefCell<T>: ptr to UnsafeCell owned value, unsafe cast *ptr to & or &mut. { &mut *ptr }
+// Rc<RefCell<Node<T>>, multiple owners each own a clone to interior mutable boxed Node value.
 
 mod MyRc {
     use core::marker::PhantomData;
     use core::ptr::NonNull;
     use std::cell::Cell;
-
+    
     struct RcInner<T> {
-        value: T,
+        value: T,    // Rc<RefCell<T>, not using value: RefCell<T> as T itself is RefCell.
         refcount: Cell<usize>,
+        // why have to use Cell<usize> instead of usize ?
+        // the clone(&self) takes shared ref, 
+        // cannot assign to `inner.refcount`, which is behind a `&` reference 
     }
     pub struct MyRc<T> {
-        inner: NonNull<RcInner<T>>,
-        _marker: PhantomData<RcInner<T>>,
+        inner: NonNull<RcInner<T>>,  // boxed raw ptr T* to NonNull<T>.
+        _marker: PhantomData<RcInner<T>>,  // Inner is a T*, PhantomData ensures T* is always a valid ptr.
     }
     impl<T> MyRc<T> {
         pub fn new(value: T) -> Self {
