@@ -1,21 +1,26 @@
 // https://tekshinobi.com/rust-tips-box-rc-arc-cell-refcell-mutex/
 
-// Rc let you hold a shared ref without worry lifetime as ref counting.
-// Cell<T> let you mutate(setter) via a shared ref.  { state: Cell<RefState> }
-// RefCell<T> use UnsafeCell to store value and Cell<RefState> to track ref counts using unsafe { &*self }
+// Rc Innner is a boxed ptr to heap alloced T guarded by refcnt. 
+// Multiple owners each has its own RC clone. RC clone creates a shared_ptr(boxed raw ptr) to RcInner.
+// Cell<T> always copy T. { state: Cell<RefState> }
+// RefCell<T>: ptr to UnsafeCell owned value, unsafe cast *ptr to & or &mut. { &mut *ptr }
+// Rc<RefCell<Node<T>>, multiple owners each own a clone to interior mutable boxed Node value.
 
 mod MyRc {
     use core::marker::PhantomData;
     use core::ptr::NonNull;
     use std::cell::Cell;
-
+    
     struct RcInner<T> {
-        value: T,
+        value: T,    // Rc<RefCell<T>, not using value: RefCell<T> as T itself is RefCell.
         refcount: Cell<usize>,
+        // why have to use Cell<usize> instead of usize ?
+        // the clone(&self) takes shared ref, 
+        // cannot assign to `inner.refcount`, which is behind a `&` reference 
     }
     pub struct MyRc<T> {
-        inner: NonNull<RcInner<T>>,
-        _marker: PhantomData<RcInner<T>>,
+        inner: NonNull<RcInner<T>>,  // boxed raw ptr T* to NonNull<T>.
+        _marker: PhantomData<RcInner<T>>,  // Inner is a T*, PhantomData ensures T* is always a valid ptr.
     }
     impl<T> MyRc<T> {
         pub fn new(value: T) -> Self {
@@ -56,6 +61,95 @@ mod MyRc {
             } else {
                 inner.refcount.set(c - 1);
             }
+        }
+    }
+}
+
+mod MyRefCeel {
+    use std::cell::UnsafeCell;
+    #[derive(Copy, Clone)]
+    enum RefState {
+        Unshared,
+        Shared(usize),
+        Exclusive,
+    }
+    pub struct RefCell<T> {
+        value: UnsafeCell<T>,
+        state: std::Cell::cell<RefState>,
+    }
+
+    impl<T> RefCell<T> {
+        pub fn new(value: T) -> Self {
+            Self { 
+                value: UnsafeCell::new(value),
+                state: Cell::new(RefState::Unshared),
+            }
+        }
+        pub fn borrow(&self) -> Option<Ref<'_, T>> {
+            // if unlock, shared, ref+1
+            // if shared, shared+1
+            // if exclusive, 
+            match self.state.get() {
+                RefState::Unshared => {
+                    self.state.set(RefState::Shared(1));
+                    Some(Ref {refcell: self})
+                }
+                RefState::Shared(n) => {
+                    self.state.set(RefState::Shared(n+1));
+                    Some(Ref { refcell: self})
+                }
+                RefState::Exclusive => Noen
+            }
+        }
+        pub fn borrow_mut(&self) -> Option<RefMut<'_, T>> {
+            if let RefState::Unshared == self.state.get() {
+                self.state.set(RefState::Exclusive);
+                Some(RefMut{refcell: self})
+            } else {
+                None
+            }
+        }
+    }
+    pub struct Ref<'refcell', T> {
+        refcell: &'refcell RefCell<T>,
+    }
+    impl<T> std::ops::Deref<T> for Ref<'_, T> {
+        type Target = T;
+        fn deref(&self) -> &Self::Target {
+            unsafe { &*self.refcell.value.get()})
+        }
+    }
+    impl<T> Drop for Ref<'_, T> {
+        fn drop(&mut self) {
+            match self.refcell.state.get() {
+                RefState::Exclusive | RefState::Unshared => unreachable!(),
+                RefState::Shared(1) => { self.refcell.state.set(RefState::Unshared))},
+                RefState::Shared(n) => { self.refcell.state.set(RefState::Shared(n-1)))},
+        }
+    }
+    pub struct MutRef<'refcell', T> {
+        refcell: &mut 'refcell RefCell<T>,
+    }
+    impl<T> Drop for MutRef<'_, T> {
+        fn drop(&mut self) {
+            match self.refcell.state.get() {
+                RefState::Unshared | RefState::Shared => unreacheable!(),
+                RefState::Exclusive => {
+                    self.refcell.state.set(RefState::Unshared);
+                }
+            }
+        }
+    }
+    impl<T> std::ops::Deref<T> for RefMut<'_, T> {
+        type Target = T;
+        fn deref(&self) -> &Self::Target {
+            unsafe {&*self.refcell.value.get()}
+        }
+    }
+    impl<T> std::ops::DerefMut<T> for RefMut<'_, T> {
+        type Target = T;
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            unsafe {&mut*self.refcell.value.get()}
         }
     }
 }
