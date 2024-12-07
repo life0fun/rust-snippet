@@ -10,44 +10,39 @@ use std::sync::atomic::AtomicPtr;
 
 // https://stackoverflow.com/questions/38713228/cannot-borrow-variable-when-borrower-scope-ends
 mod Foo {
-  trait Foo<'a> {
-    fn new(data: &'a mut u32) -> Self;
-    fn apply(&mut self);
-  }
-  struct FooS<'a> {
-    data: &'a mut u32
-  }
-
-  impl<'a> Foo<'a> for FooS<'a> {
-    fn new(data: &'a mut u32) -> Self {
-      FooS { data: data }
+    trait Foo<'a> {
+      fn new(data: &'a mut u32) -> Self where Self: Sized;
+      fn apply(&mut self);
     }
-    fn apply(&mut self) {
-        *self.data += 10;
+    struct FooS<'a> {
+      data: &'a mut u32  // ref is borrow, stored ref must have lifetime;
     }
-  }
-  fn test<F: Foo>(data: &'a mut u32)
-  where F: Foo<'a>
-  {
-      { // regional &'b < 'a can be chosen as it is not a function call.
-        //let mut foo = FooS {data: data};
-        
-        // Fn call, 'a has to be used to pass the new()
-        let mut foo = Foo::new(data);
-        foo.apply();
+    impl<'a> Foo<'a> for FooS<'a> {
+      fn new(data: &'a mut u32) -> Self {
+        FooS { data: data }
       }
-      println!("{:?}", data); // error
-  }
-  // dynamic dispatch with trait object
-  fn test_foo(f: &mut dyn Foo) {
+      fn apply(&mut self) {
+          *self.data += 10;
+      }
+    }
+    // function lifetime parameter explicitly repr 'a live longer than fn call. 
+    fn test<'a, F>(data: &'a mut u32) where F: Foo<'a> {
+      let mut foo = FooS::new(data);  // borrow lifetime of narrowed to FooS::new
+      // let mut foo: F = Foo::new(data);  // borrow lifetime of 'a 
+      foo.apply();
+      println!("data is {:?}", data);
+    }
+    fn test_dyn_foo(f: &mut dyn Foo) {
       f.apply();
-  }
-
-  fn main() {
-    let mut a = 10;
-    test::<FooS>(&mut a);
-    println!("out {:?}", a)
-  }
+    }
+  
+    pub fn main() {
+      let mut a = 10;
+      test::<FooS>(&mut a);
+      println!("out {:?}", a);
+      let mut foo = FooS::new(&mut a);
+      test_dyn_foo(&mut foo);
+    }
 }
 
 mod borrow_reborrow {
@@ -56,157 +51,130 @@ mod borrow_reborrow {
     use std::sync::atomic::Ordering;
 
     pub fn move_or_reborrow_mut_ref() {
-        let mut x = 10;
+        let mut s = String::from("hello");
         {
-            let x_share_ref = &x;
-            let x_share_ref2 = x_share_ref; // share a shared-borrow to another ref
-            assert_eq!(*x_share_ref, 10);
+            let s_share_ref = &s;
+            let s_share_ref2 = s_share_ref; // share a shared-borrow to another ref
+            assert_eq!(s_share_ref, "hello");
 
-            let x_mut_ref = &mut x;
-            let x_mut_ref_2 = x_mut_ref; // moved exclusive mut borrow
-            // assert_eq!(*x_mut_ref, 10);  // x_mut_ref moved, can not use here.
-            assert_eq!(x, 10);
+            let s_mut_ref = &mut s;
+            let s_mut_ref2 = s_mut_ref; // moved exclusive mut borrow
+            s_mut_ref2.push('1');
+            //assert_eq!(s_mut_ref, "hello");  // s_mut_ref binding moved to s_mut_ref2
+            assert_eq!(s_mut_ref2, "hello1");  // s_mut_ref binding moved to s_mut_ref2
+            assert_eq!(s, "hello1");  // s_mut_ref binding moved to s_mut_ref2
         }
         {
-            let x_mut_ref = &mut x;
+            let mut s = String::from("hello");
+            let s_mut_ref = &mut s;
             // a mut ref can be re-borrowed
-            let x_mut_ref_2 = &mut *x_mut_ref; // explicit re-borrow
-            let x_mut_ref_3: &mut i32 = x_mut_ref; // exclusively mut re-borrow by coerce from x_ref
-
-            // can not touch x_mut_ref after it being exclusively mut re-borrowed.
-            // println!("x_mut_ref = {} ", x_mut_ref);
-
-            *x_mut_ref_3 = 12;
-            assert_eq!(*x_mut_ref_3, 12);
-            // assert_eq!(*x_mut_ref_2, 12);
-            assert_eq!(*x_mut_ref, 12);
+            let s_mut_ref2 = &mut *s_mut_ref; // explicit re-borrow
+            s_mut_ref2.push('2');
+            assert_eq!(s_mut_ref2, "hello2");
+            assert_eq!(s, "hello2");
         }
-        println!("x = {}", x);
+        {
+            let mut s = String::from("hello");
+            let mut s_mut_ref = &mut s;
+            // a mut ref can be re-borrowed
+            let s_mut_ref2 = &mut s_mut_ref; // explicit re-borrow
+            s_mut_ref2.push('2');
+            assert_eq!(/*deref=*/*s_mut_ref2, "hello2");
+            assert_eq!(s, "hello2");
+        }
+        {
+            let mut s = String::from("hello");
+            let mut s_mut_ref = &mut s;
+            // a mut ref can be re-borrowed
+            let s_mut_ref2 = &mut s_mut_ref; // explicit re-borrow
+            s_mut_ref2.push('2');
+            assert_eq!(/*deref=*/*s_mut_ref2, "hello2");
+            assert_eq!(s, "hello2");
+        }
+        {
+            let mut s = String::from("hello");
+            let mut s_mut_ref = &mut s;
+            let mut s_mut_ref2 = &mut s_mut_ref;
+            // a mut ref can be re-borrowed
+            let s_mut_ref3 = &mut s_mut_ref2; // ref3 explicit re-borrow  
+            // s_mut_ref2.push('2'); // ref2 already borrowed to ref3, can not re-borrow more than once
+            s_mut_ref3.push('2');
+            assert_eq!(/*deref=*/**s_mut_ref3, "hello2");
+            assert_eq!(/*deref=*/*s_mut_ref2, "hello2");
+            assert_eq!(s, "hello2");
+        }
+        println!("s = {:?}", s);
     }
-    pub fn reborrow() {
-        let mut data = "hello".to_string();
-        let ref1 = &mut data; // data is write locked after borrow to ref1.
-        let ref2 = &mut *ref1; // ref1 is write locked after reborrow to ref2
+    pub fn ref_as_raw_pointer() {
+        let mut s = "hello".to_string();
+        let s_ptr = &mut s as *mut String;
+        unsafe { *s_ptr = "hello1".to_string() };
+        assert_eq!(s, "hello1");
+        
+        // let s2 = *s_ptr;  // can not move out behind raw ptr.
 
-        // can not mut data until its mut borrow/lock to ref1 is dropped.
-        // data = "hello again".to_string();
-
-        // &mut is a var(pointer) holds the ownership. Like a AtomicPtr.
-        // any var that gives out mut borrow/WLocked, can not reborrow or move(=)
-        // can not mov out of ref1 unless its reborrowed to ref2 is dropped.
-        // let ref3 = ref1; // &mut var is also guarded by move/borrow lock.
-
-        // ref2 is ownning the data, only it can mutate data.
-        *ref2 = "hello by ref2".to_string();
-        println!("{}", *ref2);
-
-        // can not mutate ref1 until its mut borrow/lock to ref2 is dropped.
-        // *ref1 = "hello by ref1".to_string();
-        // can not borrow data until its mut borrow is dropped.
-        // println!("{}", data);
-
-        *ref2 = "hello by ref2".to_string();
-        println!("{}", *ref2);
-
-        // ref2 dropped after use. now ref1 owns data.
-        *ref1 = "hello by ref1".to_string();
-        // can not borrow data until its mut borrow to ref1 is dropped.
-        println!("{}", data);
-
-        // now ref1 is dropped, data is solely owned.
-        data = "hello again".to_string();
-        println!("{}", data);
-    }
-    pub fn ref_as_pointer() {
-        let mut x = 10;
-        let x_ptr = &mut x as *mut i32;
-        assert!(!x_ptr.is_null());
-
-        unsafe { *x_ptr = 11 };
-        assert_eq!(x, 11);
-
-        // Plain-Old-data, just no move ownership.
-        let x_ptr2 = x_ptr;
-        unsafe { *x_ptr = 12 }; // *x_ptr = 11;
-        unsafe { *x_ptr2 = 13 }; // *x_ptr = 11;
-        assert_eq!(unsafe { *x_ptr }, 13);
-        assert_eq!(x, 13);
-
-        let mut x_ptr = &mut x as *mut i32;
-        // no move, but the mut borrow on the var still exclusive.
-        let x_ptr3 = &mut x_ptr;
-        unsafe { *x_ptr = 12 }; // *x_ptr = 11;
-        assert_eq!(unsafe { *x_ptr }, 12);
-        // assert_eq!(unsafe {**x_ptr3}, 12);
-        let x_ptr4 = &mut x_ptr;
-        assert_eq!(unsafe { **x_ptr4 }, 12);
-
-        let mut x_const_ptr = &x as *const i32;
-        let mut x_mut_ptr = &mut x as *mut i32;
-
-        x_const_ptr = x_mut_ptr as *const i32;
-        x_mut_ptr = x_const_ptr as *mut i32;
+        // ptr is primitive, copy, not move
+        let s_ptr2 = s_ptr;
+        unsafe { *s_ptr2 = "world".to_string() };
+        // deref a raw ptr, value can not move out as it is behind raw ptr.
+        assert_eq!(s, "world");
+        assert_eq!(unsafe {& *s_ptr}, "world");
+        assert_eq!(unsafe {& *s_ptr2}, "world");
+        
+        let mut s_ref = unsafe { &mut *s_ptr};
+        s_ref.push('1');
+        assert_eq!(s, "world1");
+        assert_eq!(unsafe {& *s_ptr}, "world1");
+        assert_eq!(unsafe {& *s_ptr2}, "world1");
     }
 
     pub fn cast_ptr() {
         let mut x = 10;
         let mut x_const_ptr = &x as *const i32;
         let mut x_mut_ptr = &mut x as *mut i32;
+        assert_eq!(unsafe{*x_const_ptr}, 10);
+        assert_eq!(unsafe{*x_mut_ptr}, 10);
 
         x_const_ptr = x_mut_ptr as *const i32;
         x_mut_ptr = x_const_ptr as *mut i32;
+        assert_eq!(unsafe{*x_const_ptr}, 10);
+        assert_eq!(unsafe{*x_mut_ptr}, 10);
     }
-
+    // NonNull impls Copy Trait, ptr is copy
     pub fn nonnull() {
-        let mut x = 10;
-        let mut ptr = NonNull::<i32>::new(&mut x as *mut _).expect("non null is valid");
-        // no move on <=
-        let mut ptr2 = ptr; // no move
-        assert_eq!(unsafe { *ptr.as_ptr() }, 10);
-        assert_eq!(unsafe { *ptr2.as_ptr() }, 10);
-        // mut
-        unsafe { *ptr2.as_mut() += 1 };
-        assert_eq!(unsafe { *ptr.as_ptr() }, 11);
+        let mut s = "hello".to_string();
+        let mut ptr = NonNull::<String>::new(&mut s as *mut _).expect("non null is valid");
+        
+        let ptr2 = ptr; // no move
+        assert_eq!(unsafe { &*ptr.as_ptr() }, "hello");
+        assert_eq!(unsafe { &*ptr2.as_ptr() }, "hello");
+        
+        unsafe { *ptr2.as_ptr() = "world".to_string()};
+        assert_eq!(s, "world");
+        assert_eq!(unsafe { &*ptr.as_ptr() }, "world");
+        assert_eq!(unsafe { &*ptr2.as_ptr() }, "world");
+        
+        let mut ref1 = unsafe { ptr.as_mut() };
+        ref1.push('1');
+        assert_eq!(s, "world1");
+        assert_eq!(ref1, "world1");
+        assert_eq!(unsafe { &*ptr.as_ptr() }, "world1");
+        assert_eq!(unsafe { &*ptr2.as_ptr() }, "world1");
+        
+        let mut s2 = "hello".to_string();
+        let mut s2_ptr = unsafe { NonNull::new_unchecked(&mut s2) };
+        let s2_ref1 = &mut s2_ptr; // even copyable value is guarded by borrow rules.
+        unsafe {*s2_ref1.as_mut() = "world".to_string(); }
+        assert_eq!(unsafe{s2_ref1.as_ref()}, "world");
 
-        // mut borrow on the var still exclusive
-        let ptr3 = &mut ptr;
-        unsafe { *ptr.as_mut() += 1 };
-        assert_eq!(unsafe { *ptr.as_ptr() }, 12);
-        // assert_eq!(unsafe {*ptr3.as_ptr()}, 12);
-
-        let ptr4 = &mut ptr;
-        unsafe { *ptr4.as_mut() += 1 };
-        assert_eq!(unsafe { *ptr4.as_ptr() }, 13);
-
-        let mut s = "hell".to_string();
-        let mut ptr = unsafe { NonNull::new_unchecked(&mut s) };
-        let ref1 = &mut ptr; // even copyable value is guarded by borrow rules.
-                             // can not use it after mutably borrowed, though the ptr is copyable.
-                             //unsafe {*ptr.as_ptr() = "world".to_string(); }
-        println!("ref1={:?}", ref1);
-
-        // NonNull<T> is copyable. Option<NonNull<T> also copyable.
+        // // NonNull<T> is copyable. Option<NonNull<T> also copyable.
         let mut cp1 = ptr;
         let mut cp2 = ptr;
 
         let mut cp1ref = unsafe { cp1.as_mut() };
         let mut cp2ref = unsafe { cp2.as_mut() };
-        let cp1refre = &mut cp1ref;
-        //println!("cp1ref={:?}", cp1ref);
-        println!("cp1refre={:?}", cp1refre);
-
-        s = "world".to_string();
-        unsafe {
-            println!(
-                "ptr={:?} cp1={:?} cp2={:?}",
-                ptr.as_mut(),
-                cp1.as_mut(),
-                cp2.as_mut()
-            );
-
-            **cp1refre = "lleh".to_string();
-            println!("ptr={:?}", ptr.as_mut());
-        }
+        let cp1ref_ref = &mut cp1ref;
+        // println!("cp1ref={:?}", cp1ref);  // already mut borrowed.
     }
 
     pub fn atomic_ptr() {
@@ -246,54 +214,55 @@ mod borrow_reborrow {
         }
     }
 }
+
 mod variance {
-// decouple the mut borrow of str from the lifetime of &str.
-fn strtok<'a, 'b>(s: &'b mut &'a str, delimit: char) -> &'a str {
-    if let Some(i) = s.find(delimit) {
-        let prefix = &s[..i];
-        let suffix = &s[(i + 1)..];
-        *s = suffix;
-        prefix
-    } else {
-        let prefix = *s;
-        *s = "";
-        prefix
+    // decouple the mut borrow of str from the lifetime of &str.
+    fn strtok<'a, 'b>(s: &'b mut &'a str, delimit: char) -> &'a str {
+        if let Some(i) = s.find(delimit) {
+            let prefix = &s[..i];
+            let suffix = &s[(i + 1)..];
+            *s = suffix;
+            prefix
+        } else {
+            let prefix = *s;
+            *s = "";
+            prefix
+        }
     }
-}
 
-// the returned str is the same lifetime of the passed in str, the lifetime of borrow can be shortned.
-// fn strtok_covariant<'a>(s: &mut &'a str, delimit: char) -> &'a str {
-  
-// mutable borrow is the same lifetime of the returned str.
-fn strtok_covariant<'a>(s: &'a mut &'a str, delimit: char) -> &'a str {
-    if let Some(i) = s.find(delimit) {
-        let prefix = &s[..i];
-        let suffix = &s[(i + 1)..];
-        *s = suffix;
-        prefix
-    } else {
-        let prefix = *s;
-        *s = "";
-        prefix
+    // the returned str is the same lifetime of the passed in str, the lifetime of borrow can be shortned.
+    // fn strtok_covariant<'a>(s: &mut &'a str, delimit: char) -> &'a str {
+    
+    // mutable borrow is the same lifetime of the returned str.
+    fn strtok_covariant<'a>(s: &'a mut &'a str, delimit: char) -> &'a str {
+        if let Some(i) = s.find(delimit) {
+            let prefix = &s[..i];
+            let suffix = &s[(i + 1)..];
+            *s = suffix;
+            prefix
+        } else {
+            let prefix = *s;
+            *s = "";
+            prefix
+        }
     }
-}
 
-pub fn test() {
-  {
-      let mut hello_str = "hello world";
-      let prefix = strtok_covariant(&mut hello_str, ' ');
-      // mutable borrow of hello_str lives as long as the returned prefix is in scope.
-      // hence the immut borrow of hello_str is invalid.
-      assert_eq!(hello_str, "world");
-      assert_eq!(prefix, "hello");
-  }
-  {
-      let mut hello_str = "hello world";
-      let prefix = strtok(&mut hello_str, ' ');
-      assert_eq!(hello_str, "world");
-      assert_eq!(prefix, "hello");
-  }
-}
+    pub fn test() {
+    {
+        let mut hello_str = "hello world";
+        let prefix = strtok_covariant(&mut hello_str, ' ');
+        // mutable borrow of hello_str lives as long as the returned prefix is in scope.
+        // hence the immut borrow of hello_str is invalid.
+        assert_eq!(hello_str, "world");
+        assert_eq!(prefix, "hello");
+    }
+    {
+        let mut hello_str = "hello world";
+        let prefix = strtok(&mut hello_str, ' ');
+        assert_eq!(hello_str, "world");
+        assert_eq!(prefix, "hello");
+    }
+    }
 }
 
 mod mut_borrow_lifetime {
@@ -355,6 +324,11 @@ mod mut_borrow_lifetime {
 }
 
 fn main() {
+    borrow_reborrow::move_or_reborrow_mut_ref();
+    borrow_reborrow::reborrow();
+    borrow_reborrow::ref_as_pointer();
+    borrow_reborrow::cast_ptr();
+    borrow_reborrow::nonnull();
     borrow_reborrow::atomic_ptr();
     variance::test();
 }
